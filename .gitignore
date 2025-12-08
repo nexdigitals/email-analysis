@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+
+# Env files
+*.env
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# Playwright artifacts
+playwright/.cache/
+
+# Logs
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# CSV outputs
+backend/results/

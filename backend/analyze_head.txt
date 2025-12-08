@@ -1,0 +1,201 @@
+import concurrent.futures
+import datetime
+import ipaddress
+import logging
+import os
+import socket
+import re
+from typing import Iterable, List, Optional
+from urllib.parse import urlparse
+
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
+from dotenv import load_dotenv
+import json
+
+# Load environment variables from a local .env if present
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+# Tunable defaults (override via env vars)
+DEFAULT_TIMEOUT = int(os.getenv("ANALYZER_TIMEOUT_SEC", "12"))
+PLAYWRIGHT_TIMEOUT = int(os.getenv("ANALYZER_PLAYWRIGHT_TIMEOUT_SEC", "20"))
+MAX_CONTENT_LENGTH = int(os.getenv("ANALYZER_MAX_CONTENT_BYTES", "2000000"))  # ~2MB
+MAX_REDIRECTS = int(os.getenv("ANALYZER_MAX_REDIRECTS", "5"))
+USER_AGENT = os.getenv(
+    "ANALYZER_USER_AGENT",
+    "Mozilla/5.0 (compatible; EmailAnalyzerBot/1.0; +https://example.com/bot-info)",
+)
+ALLOW_PRIVATE_IP = os.getenv("ANALYZER_ALLOW_PRIVATE_IP", "0").lower() in ("1", "true", "yes")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+
+def _build_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=2,
+        backoff_factor=0.4,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+SESSION = _build_session()
+
+
+def _is_private_ip(host: str) -> bool:
+    try:
+        infos = socket.getaddrinfo(host, None)
+        for family, _, _, _, sockaddr in infos:
+            if family in (socket.AF_INET, socket.AF_INET6):
+                ip = ipaddress.ip_address(sockaddr[0])
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                    return True
+    except Exception:
+        return False
+    return False
+
+
+def validate_url(url: str) -> str:
+    if not url:
+        raise ValueError("URL is required")
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("URL must start with http or https")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL host is missing")
+    if not ALLOW_PRIVATE_IP and _is_private_ip(host):
+        raise ValueError("Target host is not reachable (private or disallowed)")
+    return url
+
+
+def fetch_html_requests(url: str, timeout: int = DEFAULT_TIMEOUT) -> Optional[str]:
+    try:
+        validate_url(url)
+    except ValueError as exc:
+        logger.warning("URL validation failed", extra={"url": url, "error": str(exc)})
+        return None
+
+    try:
+        with SESSION.get(
+            url,
+            timeout=timeout,
+            headers={"User-Agent": USER_AGENT},
+            allow_redirects=True,
+            stream=True,
+        ) as r:
+            r.raise_for_status()
+            content_length = r.headers.get("Content-Length")
+            if content_length and int(content_length) > MAX_CONTENT_LENGTH:
+                logger.warning("Content too large", extra={"url": url, "content_length": content_length})
+                return None
+
+            chunks: List[bytes] = []
+            total = 0
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    total += len(chunk)
+                    if total > MAX_CONTENT_LENGTH:
+                        logger.warning("Content exceeded max length mid-stream", extra={"url": url, "bytes": total})
+                        return None
+                    chunks.append(chunk)
+            return b"".join(chunks).decode(r.encoding or "utf-8", errors="replace")
+    except Exception as exc:
+        logger.warning("fetch_html_requests failed", extra={"url": url, "error": str(exc)})
+        return None
+
+
+def fetch_html_playwright(url: str, timeout: int = PLAYWRIGHT_TIMEOUT) -> Optional[str]:
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.set_default_navigation_timeout(timeout * 1000)
+            page.set_default_timeout(timeout * 1000)
+            page.goto(url, wait_until="domcontentloaded")
+            content = page.content()
+            browser.close()
+            return content
+    except Exception as exc:
+        logger.warning("fetch_html_playwright failed", extra={"url": url, "error": str(exc)})
+        return None
+
+
+def fetch_html(url: str, render_js: bool = False) -> Optional[str]:
+    html = fetch_html_requests(url)
+    if html:
+        return html
+    if render_js:
+        return fetch_html_playwright(url)
+    return None
+
+
+def _compose_paragraph(items: Iterable[str], intro: str, tone: str = "professional", max_words: int = 180) -> str:
+    if not items:
+        return "No significant issues detected in the audited areas."
+    bullets = "; ".join(items)
+    paragraph = f"{intro} {bullets}."
+    words = paragraph.split()
+    if len(words) <= max_words:
+        return paragraph
+    return " ".join(words[:max_words]).rstrip() + "..."
+
+
+def _ai_generate(text: str, url: str, company_name: str, fullname: str) -> Optional[dict]:
+    """
+    Optional AI layer: summarize with one observation and one solution in plain English.
+    """
+    if not OPENAI_API_KEY:
+        return None
+    try:
+        from openai import OpenAI
+    except ImportError:
+        logger.warning("OpenAI SDK not installed; skipping AI insights")
+        return None
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    prompt = f"""
+You are a clear, non-salesy web auditor. Write one plain-English observation and one simple solution a busy owner would trust.
+
+CONTEXT:
+- URL: {url}
+- Company: {company_name}
+- Name: {fullname}
+- Scraped Text Snippet: {text[:4000]}
+
+INSTRUCTIONS:
+- If the text is empty or shows errors (404, Forbidden, Access denied, JavaScript required), say the site is not reliably reachable and focus on reliability.
+- Otherwise, look for: weak/missing CTA, outdated/static feel (no motion/modern UI), missing trust signals, slow/technical risks, missing lead capture/AI.
+- Do not mention specific frameworks or tools (e.g., Next.js, Motion One); keep language general (modern UI, motion/animation).
+- Use short, concrete sentences. No hype, no jargon, no greetings.
+
+OUTPUT (STRICT JSON):
+{{
+  "problem": "<1-2 short sentences describing the main issue in plain words>",
+  "offers": "<1-2 short sentences describing the fix in plain words (outcome + simple mechanism)>"
+}}
+- Keep each sentence under 25 words.
+- Do not add extra keys, text, or formatting outside the JSON.
+"""
+    try:
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=240,
+            response_format={"type": "json_object"},
+
