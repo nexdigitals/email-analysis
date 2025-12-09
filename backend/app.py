@@ -57,7 +57,7 @@ def get_mongo_collection():
 
 def save_result_to_mongo(doc: dict):
     col = get_mongo_collection()
-    if not col:
+    if col is None:
         return
     try:
         col.insert_one(doc)
@@ -66,7 +66,7 @@ def save_result_to_mongo(doc: dict):
 
 def save_many_to_mongo(docs: list):
     col = get_mongo_collection()
-    if not col or not docs:
+    if col is None or not docs:
         return
     try:
         col.insert_many(docs, ordered=False)
