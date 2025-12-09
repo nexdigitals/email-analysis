@@ -20,6 +20,8 @@ export default function App() {
   const [sortKey, setSortKey] = useState('website_url')
   const [sortDir, setSortDir] = useState('asc')
   const [filterText, setFilterText] = useState('')
+  const [tableNotice, setTableNotice] = useState('')
+  const [csvNotice, setCsvNotice] = useState('')
 
   const cardsRef = useRef([])
   const resultRef = useRef(null)
@@ -122,6 +124,40 @@ export default function App() {
 
   const summary = result?.result
   const isBatch = typeof result?.count === 'number'
+
+  async function handleDownloadCsv() {
+    setCsvNotice('')
+    try {
+      const res = await fetch(`${API_BASE}/results.csv`)
+      if (!res.ok) throw new Error('No results file available yet.')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'results.csv'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      setCsvNotice('Downloaded latest CSV.')
+    } catch (err) {
+      setCsvNotice('No results available yet. Run an analysis first.')
+    }
+  }
+
+  async function handleFetchTable() {
+    setTableNotice('')
+    try {
+      const r = await fetch(`${API_BASE}/results.json`)
+      if (!r.ok) throw new Error('No results file available yet.')
+      const j = await r.json()
+      setResultsTable(j)
+      setTableNotice(j.length ? `Loaded ${j.length} rows.` : 'No results yet.')
+    } catch (err) {
+      setResultsTable([])
+      setTableNotice('No results available yet. Run an analysis first.')
+    }
+  }
 
   function handleFileSelect(file) {
     if (file) setCsvFile(file)
@@ -227,16 +263,17 @@ export default function App() {
           </div>
 
           <div className="panel fade" ref={el => (cardsRef.current[2] = el)}>
-            <div className="panel-head">
-              <div>
-                <p className="eyebrow">Downloads</p>
-                <h2>Latest & history</h2>
+              <div className="panel-head">
+                <div>
+                  <p className="eyebrow">Downloads</p>
+                  <h2>Latest & history</h2>
+                </div>
               </div>
-            </div>
-            <div className="stack">
-              <a className="link" href={`${API_BASE}/results.csv`}>
+              <div className="stack">
+              <button type="button" className="ghost" onClick={handleDownloadCsv}>
                 Download latest CSV
-              </a>
+              </button>
+              {csvNotice && <p className="muted">{csvNotice}</p>}
               <label className="field">
                 <span>Pick a past run</span>
                 <select value={selectedFile} onChange={e => setSelectedFile(e.target.value)}>
@@ -256,18 +293,11 @@ export default function App() {
               <button
                 type="button"
                 className="ghost"
-                onClick={async () => {
-                  try {
-                    const r = await fetch(`${API_BASE}/results.json`)
-                    const j = await r.json()
-                    setResultsTable(j)
-                  } catch (err) {
-                    setResult({ error: 'Failed to fetch results.json: ' + err.message })
-                  }
-                }}
+                onClick={handleFetchTable}
               >
                 Show latest results table
               </button>
+              {tableNotice && <p className="muted">{tableNotice}</p>}
             </div>
           </div>
         </div>
@@ -306,7 +336,7 @@ export default function App() {
           </div>
         )}
 
-        {resultsTable && (
+        {resultsTable && resultsTable.length > 0 && (
           <div className="panel fade">
             <div className="panel-head">
               <div>
@@ -350,6 +380,17 @@ export default function App() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+        {resultsTable && resultsTable.length === 0 && (
+          <div className="panel fade">
+            <div className="panel-head">
+              <div>
+                <p className="eyebrow">Results</p>
+                <h2>Latest table</h2>
+              </div>
+            </div>
+            <p className="muted">No results available yet. Run an analysis to populate the table.</p>
           </div>
         )}
       </div>
