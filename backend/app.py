@@ -60,7 +60,8 @@ def save_result_to_mongo(doc: dict):
     if col is None:
         return
     try:
-        col.insert_one(doc)
+        # Avoid mutating the original dict that we return to clients
+        col.insert_one(dict(doc))
     except PyMongoError as exc:
         logger.warning(f"Mongo insert failed: {exc}")
 
@@ -69,7 +70,7 @@ def save_many_to_mongo(docs: list):
     if col is None or not docs:
         return
     try:
-        col.insert_many(docs, ordered=False)
+        col.insert_many([dict(d) for d in docs], ordered=False)
     except PyMongoError as exc:
         logger.warning(f"Mongo bulk insert failed: {exc}")
 
@@ -130,6 +131,9 @@ def analyze_endpoint():
 
     # Persist to MongoDB if configured
     save_result_to_mongo(result)
+
+    # Remove Mongo _id if inserted, to keep response JSON-serializable
+    result.pop("_id", None)
     
     return jsonify({"message": "Analysis complete", "csv_path": RESULTS_PATH, "result": result})
 
