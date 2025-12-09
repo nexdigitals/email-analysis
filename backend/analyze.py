@@ -1,5 +1,6 @@
 import concurrent.futures
 import datetime
+import gc  # memory management
 import json
 import logging
 import os
@@ -30,7 +31,8 @@ logging.basicConfig(level=logging.INFO)
 PLAYWRIGHT_TIMEOUT = int(os.getenv("ANALYZER_PLAYWRIGHT_TIMEOUT_SEC", "30"))
 USER_AGENT = os.getenv("ANALYZER_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 PLAYWRIGHT_HEADLESS = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() not in ("0", "false", "no")
-PLAYWRIGHT_CONCURRENCY = max(1, int(os.getenv("ANALYZER_PLAYWRIGHT_CONCURRENCY", "2")))
+# Force single-page at a time to stay within 512MB free tier limits
+PLAYWRIGHT_CONCURRENCY = 1
 _PLAYWRIGHT_SEMAPHORE = threading.Semaphore(PLAYWRIGHT_CONCURRENCY)
 TEXT_SNIPPET_LIMIT = int(os.getenv("ANALYZER_TEXT_SNIPPET_LIMIT", "800"))
 
@@ -120,14 +122,41 @@ def fetch_screenshot_and_text(url: str, render_js: bool = True, timeout_sec: Opt
     page = None
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=PLAYWRIGHT_HEADLESS)
-            context = browser.new_context(user_agent=USER_AGENT, viewport={'width': 1280, 'height': 800})
+            browser = p.chromium.launch(
+                headless=PLAYWRIGHT_HEADLESS,
+                args=[
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-gpu",
+                    "--disable-software-rasterizer",
+                    "--disable-extensions",
+                ],
+            )
+            context = browser.new_context(
+                user_agent=USER_AGENT,
+                viewport={'width': 1200, 'height': 720},
+                device_scale_factor=1,
+            )
             page = context.new_page()
             page.set_default_timeout(eff_timeout * 1000)
+
+            # Block heavy resources (keep images; drop media/fonts)
+            def _route_handler(route):
+                rtype = route.request.resource_type
+                if rtype in ("media", "font"):
+                    route.abort()
+                else:
+                    route.continue_()
+
+            try:
+                page.route("**/*", _route_handler)
+            except Exception as route_exc:
+                logger.debug(f"Route setup issue (continuing without blocking): {route_exc}")
             
             try:
                 page.goto(url, wait_until="domcontentloaded")
-                time.sleep(3) # Wait for JS to load
+                time.sleep(2) # small pause for JS
             except Exception as e:
                 logger.warning(f"Navigation warning: {e}")
 
@@ -137,7 +166,7 @@ def fetch_screenshot_and_text(url: str, render_js: bool = True, timeout_sec: Opt
             screenshot_path = os.path.join(tempfile.gettempdir(), f"temp_{clean_host}_{timestamp}.jpg")
             
             try:
-                page.screenshot(path=screenshot_path, full_page=False, quality=70, type='jpeg')
+                page.screenshot(path=screenshot_path, full_page=False, quality=60, type='jpeg')
             except Exception:
                 screenshot_path = None
 
@@ -165,6 +194,7 @@ def fetch_screenshot_and_text(url: str, render_js: bool = True, timeout_sec: Opt
         except Exception as close_exc:
             logger.debug(f"Playwright close issue: {close_exc}")
         _PLAYWRIGHT_SEMAPHORE.release()
+        gc.collect()
 
 # -------------------------------------------------------------------------
 # TECH DETECTION
@@ -384,6 +414,8 @@ def results_to_csv(rows, path):
     df.to_csv(path, index=False)
 
 def analyze_sites_concurrent(sites, max_workers: int = 2, render_js: bool = True):
+    # Force serial execution to avoid multiple Playwright instances on low-memory plans
+    max_workers = 1
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = [ex.submit(analyze_site, s.get("url"), s.get("company"), s.get("fullname"), render_js) for s in sites]
