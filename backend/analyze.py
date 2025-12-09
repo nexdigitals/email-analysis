@@ -277,7 +277,7 @@ def _ai_vision_generate(screenshot_path: Optional[str], text: str, url: str, com
             buf = io.BytesIO()
             img.save(buf, format="JPEG")
             parts = [
-                genai.types.Part.from_bytes(buf.getvalue(), mime_type="image/jpeg"),
+                genai.types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg"),
                 prompt,
             ]
 
