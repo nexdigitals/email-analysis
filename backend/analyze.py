@@ -266,7 +266,8 @@ def _ai_vision_generate(screenshot_path: Optional[str], text: str, url: str, com
         f"Text snippet: {text_snippet}\n"
         "Prefer what you SEE in the screenshot; use text only if unseen. Ignore cookie banners/ads.\n"
         "Checks: chat bubble/popup/button visibility; contact/quote text without form fields = high friction; design Modern/Premium vs Dated/Standard.\n"
-        "If unsure, set level to 'Level 1' and include 'uncertain' in visual_observation."
+        "Honesty: if the experience is already strong, state 'No major issues observed' and offer 'Keep current setup.'\n"
+        "Offer rule: the offer must directly solve the stated problem (shorten forms, add chat/concierge, streamline contact), not generic marketing."
     )
 
     try:
