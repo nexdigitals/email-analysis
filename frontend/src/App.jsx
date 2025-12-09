@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { gsap } from 'gsap'
 
-const API_BASE = 'http://127.0.0.1:5000'
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:5000'
 
 export default function App() {
   const [url, setUrl] = useState('')
