@@ -267,7 +267,7 @@ def _ai_vision_generate(screenshot_path: Optional[str], text: str, url: str, com
         "Prefer what you SEE in the screenshot; use text only if unseen. Ignore cookie banners/ads.\n"
         "Checks: chat bubble/popup/button visibility; contact/quote text without form fields = high friction; design Modern/Premium vs Dated/Standard.\n"
         "Honesty: if the experience is already strong, state 'No major issues observed' and offer 'Keep current setup.'\n"
-        "Offer rule: the offer must directly solve the stated problem (shorten forms, add chat/concierge, streamline contact), not generic marketing. If forms are long/rigid or manual data entry is required, propose an AI chat/agent trained on company data to handle questions and capture leads 24/7."
+        "Offer rule: the offer must directly solve the stated problem (shorten forms, add chat/concierge, streamline contact), not generic marketing. If forms are long/rigid or manual data entry is required, propose an AI chatbot trained on company data that answers any question and simultaneously captures leads/vital info 24/7."
     )
 
     try:
