@@ -163,28 +163,15 @@ def fetch_screenshot_and_text(url: str, render_js: bool = True, timeout_sec: Opt
             )
             context = browser.new_context(
                 user_agent=USER_AGENT,
-                viewport={'width': 1200, 'height': 720},
+                viewport={'width': 900, 'height': 680},  # lighter footprint
                 device_scale_factor=1,
             )
             page = context.new_page()
             page.set_default_timeout(eff_timeout * 1000)
 
-            # Block heavy resources (keep images; drop media/fonts)
-            def _route_handler(route):
-                rtype = route.request.resource_type
-                if rtype in ("media", "font"):
-                    route.abort()
-                else:
-                    route.continue_()
-
-            try:
-                page.route("**/*", _route_handler)
-            except Exception as route_exc:
-                logger.debug(f"Route setup issue (continuing without blocking): {route_exc}")
-            
             try:
                 page.goto(url, wait_until="domcontentloaded")
-                time.sleep(2) # small pause for JS
+                time.sleep(1) # short pause for JS
             except Exception as e:
                 logger.warning(f"Navigation warning: {e}")
 
@@ -194,8 +181,9 @@ def fetch_screenshot_and_text(url: str, render_js: bool = True, timeout_sec: Opt
             screenshot_path = os.path.join(tempfile.gettempdir(), f"temp_{clean_host}_{timestamp}.jpg")
             
             try:
-                page.screenshot(path=screenshot_path, full_page=False, quality=60, type='jpeg')
-            except Exception:
+                page.screenshot(path=screenshot_path, full_page=False, quality=50, type='jpeg')
+            except Exception as exc_shot:
+                logger.debug(f"Screenshot issue: {exc_shot}")
                 screenshot_path = None
 
             # 2. Get Code
