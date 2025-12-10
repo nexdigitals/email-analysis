@@ -291,34 +291,43 @@ def _ai_vision_generate(screenshot_path: Optional[str], text: str, url: str, com
         client = genai.Client(api_key=GEMINI_API_KEY)
 
         for model_name in candidates:
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=parts,
-                )
+            # basic retry/backoff for 429s
+            for attempt in range(3):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=parts,
+                    )
 
-                raw = getattr(response, "text", None)
-                if not raw and getattr(response, "candidates", None):
-                    for cand in response.candidates:
-                        parts_list = getattr(getattr(cand, "content", None), "parts", []) or []
-                        texts = [getattr(p, "text", "") for p in parts_list if getattr(p, "text", "")]
-                        if texts:
-                            raw = "\n".join(texts).strip()
-                            break
+                    raw = getattr(response, "text", None)
+                    if not raw and getattr(response, "candidates", None):
+                        for cand in response.candidates:
+                            parts_list = getattr(getattr(cand, "content", None), "parts", []) or []
+                            texts = [getattr(p, "text", "") for p in parts_list if getattr(p, "text", "")]
+                            if texts:
+                                raw = "\n".join(texts).strip()
+                                break
 
-                parsed = _parse_gemini_payload(raw or "")
-                if parsed:
-                    _LAST_GOOD_MODEL = model_name
-                    logger.info(f"Gemini success with model={model_name}")
-                    parsed["_model"] = model_name
-                    return parsed
+                    parsed = _parse_gemini_payload(raw or "")
+                    if parsed:
+                        _LAST_GOOD_MODEL = model_name
+                        logger.info(f"Gemini success with model={model_name}")
+                        parsed["_model"] = model_name
+                        return parsed
 
-                logger.warning(f"Gemini response unparsable for model {model_name}: {raw!r}")
-                errors.append(f"{model_name}: unparsable response")
-            except Exception as exc:
-                errors.append(f"{model_name}: {exc}")
-                logger.warning(f"Gemini Vision Error ({model_name}): {exc}")
-                continue
+                    logger.warning(f"Gemini response unparsable for model {model_name}: {raw!r}")
+                    errors.append(f"{model_name}: unparsable response")
+                    break
+                except Exception as exc:
+                    err_text = str(exc)
+                    if "RESOURCE_EXHAUSTED" in err_text or "429" in err_text:
+                        sleep_for = 2 * (attempt + 1)
+                        logger.warning(f"Gemini 429/quota for {model_name}, retry {attempt+1}/3 after {sleep_for}s")
+                        time.sleep(sleep_for)
+                        continue
+                    errors.append(f"{model_name}: {exc}")
+                    logger.warning(f"Gemini Vision Error ({model_name}): {exc}")
+                    break
 
         if errors:
             logger.error(f"Gemini failed across models: {'; '.join(errors)}")
