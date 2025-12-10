@@ -37,7 +37,16 @@ _PLAYWRIGHT_SEMAPHORE = threading.Semaphore(PLAYWRIGHT_CONCURRENCY)
 TEXT_SNIPPET_LIMIT = int(os.getenv("ANALYZER_TEXT_SNIPPET_LIMIT", "800"))
 
 # GOOGLE GEMINI SETUP (new google-genai client)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+_raw_keys = [
+    k.strip()
+    for k in (os.getenv("GEMINI_API_KEYS") or "").split(",")
+    if k.strip()
+]
+_single_fallback = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+if not _raw_keys and _single_fallback:
+    _raw_keys = [_single_fallback]
+
+GEMINI_KEYS = _raw_keys
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 _env_candidates = [m.strip() for m in os.getenv("GEMINI_MODEL_CANDIDATES", "").split(",") if m.strip()]
 GEMINI_MODEL_CANDIDATES = []
@@ -50,8 +59,26 @@ for m in (_env_candidates or []) + [
         GEMINI_MODEL_CANDIDATES.append(m)
 _LAST_GOOD_MODEL: Optional[str] = None
 
-if not GEMINI_API_KEY:
+if not GEMINI_KEYS:
     logger.error("Missing GEMINI_API_KEY (or GOOGLE_API_KEY) in .env file; Gemini calls will fail.")
+
+# simple round-robin with cooldowns for quota/overload responses
+_KEY_STATE = {
+    "idx": 0,
+    "cooldowns": {k: 0 for k in GEMINI_KEYS},
+}
+def _next_key(now: Optional[float] = None) -> Optional[str]:
+    if not GEMINI_KEYS:
+        return None
+    now = now or time.time()
+    n = len(GEMINI_KEYS)
+    for i in range(n):
+        idx = (_KEY_STATE["idx"] + i) % n
+        key = GEMINI_KEYS[idx]
+        if now >= _KEY_STATE["cooldowns"].get(key, 0):
+            _KEY_STATE["idx"] = (idx + 1) % n
+            return key
+    return None
 
 # -------------------------------------------------------------------------
 # HELPERS
@@ -236,7 +263,7 @@ def detect_tech_features(html: str) -> List[str]:
 # -------------------------------------------------------------------------
 def _ai_vision_generate(screenshot_path: Optional[str], text: str, url: str, company_name: str, tech_features: List[str]) -> Optional[dict]:
     global _LAST_GOOD_MODEL
-    if not GEMINI_API_KEY:
+    if not GEMINI_KEYS:
         return {"problem": "Missing API Key", "offer": "Configure Google API Key"}
 
     tech_context = ", ".join(tech_features) if tech_features else "None detected"
@@ -288,11 +315,13 @@ def _ai_vision_generate(screenshot_path: Optional[str], text: str, url: str, com
             candidates.append(_LAST_GOOD_MODEL)
         candidates.extend([m for m in GEMINI_MODEL_CANDIDATES if m not in candidates])
 
-        client = genai.Client(api_key=GEMINI_API_KEY)
-
         for model_name in candidates:
-            # basic retry/backoff for 429s
             for attempt in range(3):
+                api_key = _next_key()
+                if not api_key:
+                    errors.append(f"{model_name}: no available API key (cooldown)")
+                    break
+                client = genai.Client(api_key=api_key)
                 try:
                     response = client.models.generate_content(
                         model=model_name,
@@ -313,6 +342,7 @@ def _ai_vision_generate(screenshot_path: Optional[str], text: str, url: str, com
                         _LAST_GOOD_MODEL = model_name
                         logger.info(f"Gemini success with model={model_name}")
                         parsed["_model"] = model_name
+                        parsed["_api_key_used"] = api_key[-6:] if len(api_key) >= 6 else "key"
                         return parsed
 
                     logger.warning(f"Gemini response unparsable for model {model_name}: {raw!r}")
@@ -322,8 +352,13 @@ def _ai_vision_generate(screenshot_path: Optional[str], text: str, url: str, com
                     err_text = str(exc)
                     if "RESOURCE_EXHAUSTED" in err_text or "429" in err_text:
                         sleep_for = 2 * (attempt + 1)
-                        logger.warning(f"Gemini 429/quota for {model_name}, retry {attempt+1}/3 after {sleep_for}s")
+                        _KEY_STATE["cooldowns"][api_key] = time.time() + max(10, sleep_for)
+                        logger.warning(f"Gemini 429/quota for {model_name}, key tail {api_key[-6:]}, retry {attempt+1}/3 after {sleep_for}s")
                         time.sleep(sleep_for)
+                        continue
+                    if "UNAVAILABLE" in err_text or "503" in err_text:
+                        _KEY_STATE["cooldowns"][api_key] = time.time() + 20
+                        logger.warning(f"Gemini 503/overloaded for {model_name}, key tail {api_key[-6:]}; switching key after short cooldown")
                         continue
                     errors.append(f"{model_name}: {exc}")
                     logger.warning(f"Gemini Vision Error ({model_name}): {exc}")
