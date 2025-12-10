@@ -3,6 +3,7 @@ import functools
 import io
 import logging
 import os
+import re
 import shutil
 from typing import Optional
 
@@ -106,6 +107,7 @@ def analyze_endpoint():
     url = payload.get("url")
     company = payload.get("company")
     fullname = payload.get("fullname")
+    email = payload.get("email")
     
     if not url: return jsonify({"error": "`url` is required"}), 400
     try:
@@ -117,7 +119,7 @@ def analyze_endpoint():
     render_js = _parse_render_js(payload)
 
     try:
-        result = analyze_site(url, company, fullname, render_js=render_js)
+        result = analyze_site(url, company, fullname, email, render_js=render_js)
     except Exception as e:
         logger.error(f"Analysis Failed: {e}")
         return jsonify({"error": "Analysis failed internally"}), 500
@@ -152,11 +154,25 @@ def analyze_csv_endpoint():
     except Exception as e:
         return jsonify({"error": f"Failed to read CSV: {str(e)}"}), 400
 
-    df.columns = [c.lower() for c in df.columns]
+    # Normalize headers
+    norm = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
+    col_map = {norm(c): c for c in df.columns}
+
+    def pick(row, keys):
+        for k in keys:
+            nk = norm(k)
+            if nk in col_map:
+                val = row.get(col_map[nk])
+                if pd.isna(val):
+                    continue
+                return str(val)
+        return None
+
     sites = []
     for _, row in df.iterrows():
-        raw_url = row.get("url")
-        if not raw_url or pd.isna(raw_url): continue
+        raw_url = pick(row, ["url", "website", "website_url"])
+        if not raw_url:
+            continue
         try:
             validate_url(str(raw_url))
         except:
@@ -164,27 +180,30 @@ def analyze_csv_endpoint():
 
         sites.append({
             "url": str(raw_url),
-            "company": row.get("company") if "company" in row else None,
-            "fullname": row.get("fullname") if "fullname" in row else None,
+            "company": pick(row, ["company", "company_name", "business", "business_name"]),
+            "fullname": pick(row, ["fullname", "full_name", "full name", "name", "contact", "contact_name"]),
+            "email": pick(row, ["email", "e-mail", "email_address", "contact_email"]),
         })
 
-    # Free-tier safety: cap batch to 5
-    if len(sites) > 5:
-        sites = sites[:5]
+    if not sites:
+        return jsonify({"error": "No valid URLs found in CSV"}), 400
 
     render_js = _parse_render_js(payload={}, form=request.form)
 
-    # Incremental save to avoid losing partial results
+    # Incremental save to avoid losing partial results; process in chunks of 5
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_path = os.path.join(RESULTS_DIR, f"results_{ts}.csv")
     results = []
-    for res in analyze_sites_concurrent(sites, max_workers=MAX_WORKERS, render_js=render_js):
-        results.append(res)
+    chunk_size = 5
+    for start in range(0, len(sites), chunk_size):
+        chunk = sites[start:start+chunk_size]
+        chunk_results = analyze_sites_concurrent(chunk, max_workers=MAX_WORKERS, render_js=render_js)
+        results.extend(chunk_results)
         results_to_csv(results, out_path)
         shutil.copyfile(out_path, RESULTS_PATH)
-    save_many_to_mongo(results)
-    
-    return jsonify({"message": "Batch complete", "count": len(results), "csv_path": RESULTS_PATH, "results_preview": results[:3]})
+        save_many_to_mongo(chunk_results)
+    preview = results[:5]
+    return jsonify({"message": "Batch complete", "count": len(results), "csv_path": RESULTS_PATH, "results_preview": preview})
 
 @app.route("/results.csv", methods=["GET"])
 @require_auth

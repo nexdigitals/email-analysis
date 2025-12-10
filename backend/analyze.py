@@ -344,12 +344,20 @@ def _ai_vision_generate(screenshot_path: Optional[str], text: str, url: str, com
 # -------------------------------------------------------------------------
 # MAIN ORCHESTRATOR
 # -------------------------------------------------------------------------
-def analyze_site(url: str, company_name: Optional[str] = None, fullname: Optional[str] = None, render_js: bool = True, timeout_sec: Optional[int] = None):
+def analyze_site(
+    url: str,
+    company_name: Optional[str] = None,
+    fullname: Optional[str] = None,
+    email: Optional[str] = None,
+    render_js: bool = True,
+    timeout_sec: Optional[int] = None,
+):
     start_ts = time.time()
     res = {
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "company_fullname": fullname or "",
         "company_name": company_name or "",
+        "email": email or "",
         "website_url": url,
         "problem": "",
         "offer": "",
@@ -416,6 +424,7 @@ def results_to_csv(rows, path):
         normalized.append({
             "full_name": r.get("company_fullname", ""),
             "company": r.get("company_name", ""),
+            "email": r.get("email", ""),
             "website_url": r.get("website_url", ""),
             "problem": r.get("problem", ""),
             "offer": r.get("offer", ""),
@@ -428,7 +437,17 @@ def analyze_sites_concurrent(sites, max_workers: int = 2, render_js: bool = True
     max_workers = 1
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = [ex.submit(analyze_site, s.get("url"), s.get("company"), s.get("fullname"), render_js) for s in sites]
+        futures = [
+            ex.submit(
+                analyze_site,
+                s.get("url"),
+                s.get("company"),
+                s.get("fullname"),
+                s.get("email"),
+                render_js,
+            )
+            for s in sites
+        ]
         for f in concurrent.futures.as_completed(futures):
             try:
                 results.append(f.result())

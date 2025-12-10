@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { gsap } from 'gsap'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:5000'
@@ -7,6 +7,7 @@ export default function App() {
   const [url, setUrl] = useState('')
   const [company, setCompany] = useState('')
   const [fullname, setFullname] = useState('')
+  const [email, setEmail] = useState('')
   const [csvFile, setCsvFile] = useState(null)
   const [renderJs, setRenderJs] = useState(true)
   const [dragging, setDragging] = useState(false)
@@ -86,14 +87,25 @@ export default function App() {
         })
         const data = await res.json()
         setResult(data)
+        if (Array.isArray(data?.results_preview)) {
+          setResultsTable(data.results_preview)
+          setTableNotice(`Loaded preview of ${data.results_preview.length} rows.`)
+          // also attempt to fetch the full table once the backend writes it
+          loadLatestTable()
+        }
       } else {
         const res = await fetch(`${API_BASE}/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, company, fullname, render_js: renderJs })
+          body: JSON.stringify({ url, company, fullname, email, render_js: renderJs })
         })
         const data = await res.json()
         setResult(data)
+        if (data?.result) {
+          setResultsTable([data.result])
+          setTableNotice('Loaded latest single result.')
+          loadLatestTable()
+        }
       }
     } catch (err) {
       setResult({ error: err.message })
@@ -110,7 +122,8 @@ export default function App() {
         if (!ft) return true
         return (
           (row.website_url || '').toLowerCase().includes(ft) ||
-          (row.company || row.full_name || '').toLowerCase().includes(ft)
+          (row.company || row.full_name || '').toLowerCase().includes(ft) ||
+          (row.email || '').toLowerCase().includes(ft)
         )
       })
       .sort((a, b) => {
@@ -125,11 +138,11 @@ export default function App() {
   const summary = result?.result
   const isBatch = typeof result?.count === 'number'
 
-  async function handleDownloadCsv() {
-    setCsvNotice('')
-    try {
-      const res = await fetch(`${API_BASE}/results.csv`)
-      if (!res.ok) throw new Error('No results file available yet.')
+async function handleDownloadCsv() {
+  setCsvNotice('')
+  try {
+    const res = await fetch(`${API_BASE}/results.csv`)
+    if (!res.ok) throw new Error('No results file available yet.')
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -141,23 +154,27 @@ export default function App() {
       URL.revokeObjectURL(url)
       setCsvNotice('Downloaded latest CSV.')
     } catch (err) {
-      setCsvNotice('No results available yet. Run an analysis first.')
-    }
+    setCsvNotice('No results available yet. Run an analysis first.')
   }
+}
 
-  async function handleFetchTable() {
-    setTableNotice('')
-    try {
-      const r = await fetch(`${API_BASE}/results.json`)
-      if (!r.ok) throw new Error('No results file available yet.')
-      const j = await r.json()
-      setResultsTable(j)
-      setTableNotice(j.length ? `Loaded ${j.length} rows.` : 'No results yet.')
-    } catch (err) {
-      setResultsTable([])
-      setTableNotice('No results available yet. Run an analysis first.')
-    }
+async function loadLatestTable() {
+  try {
+    const r = await fetch(`${API_BASE}/results.json`)
+    if (!r.ok) throw new Error('No results file available yet.')
+    const j = await r.json()
+    setResultsTable(j)
+    setTableNotice(j.length ? `Loaded ${j.length} rows.` : 'No results yet.')
+  } catch (err) {
+    setResultsTable([])
+    setTableNotice('No results available yet. Run an analysis first.')
   }
+}
+
+async function handleFetchTable() {
+  setTableNotice('')
+  await loadLatestTable()
+}
 
   function handleFileSelect(file) {
     if (file) setCsvFile(file)
@@ -194,7 +211,7 @@ export default function App() {
             </div>
           </div>
           <div className="stat-card fade" ref={el => (cardsRef.current[0] = el)}>
-            <div className="stat-value">{resultsFiles.length || '—'}</div>
+            <div className="stat-value">{resultsFiles.length || 'â€”'}</div>
             <div className="stat-label">Saved result files</div>
             <div className="stat-sub">Download any run as CSV</div>
           </div>
@@ -229,6 +246,10 @@ export default function App() {
                   <input value={fullname} onChange={e => setFullname(e.target.value)} placeholder="Jane Doe" />
                 </label>
               </div>
+              <label className="field">
+                <span>Email (optional)</span>
+                <input value={email} onChange={e => setEmail(e.target.value)} placeholder="name@company.com" />
+              </label>
 
               <label className="field">
                 <span>CSV upload (optional)</span>
@@ -240,10 +261,10 @@ export default function App() {
                   onDrop={handleDrop}
                 >
                   <div className="dropzone-inner">
-                    <span className="dropzone-icon">📄</span>
+                    <span className="dropzone-icon">ðŸ“„</span>
                     <div className="dropzone-text">
                       <p className="muted">{csvFile ? `Selected: ${csvFile.name}` : 'Drag & drop CSV here or click to choose'}</p>
-                      <small>CSV only • url, company, fullname</small>
+                      <small>CSV only – url, company, fullname, email (processed in chunks of 5)</small>
                     </div>
                   </div>
                   <input
@@ -253,11 +274,11 @@ export default function App() {
                     aria-label="CSV upload"
                   />
                 </div>
-                <small>Columns: url, company, fullname. Free tier: batch capped at 5 rows.</small>
+                <small>Columns: url, company, fullname, email. Free tier: processed in chunks of 5 rows.</small>
               </label>
 
               <button type="submit" disabled={loading} className="cta">
-                {loading ? 'Analyzing…' : csvFile ? 'Run batch' : 'Analyze now'}
+                {loading ? 'Analyzingâ€¦' : csvFile ? 'Run batch' : 'Analyze now'}
               </button>
             </form>
           </div>
@@ -358,12 +379,13 @@ export default function App() {
                 </button>
               </div>
             </div>
-            <div className="table-wrap">
+             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
                     <th>Website</th>
                     <th>Company</th>
+                    <th>Email</th>
                     <th>Problem</th>
                     <th>Offer</th>
                   </tr>
@@ -373,6 +395,7 @@ export default function App() {
                     <tr key={i}>
                       <td>{row.website_url}</td>
                       <td>{row.company || row.full_name || ''}</td>
+                      <td>{row.email || ''}</td>
                       <td>{row.problem || row.problems_paragraph}</td>
                       <td>{row.offer || row.offers_paragraph}</td>
                     </tr>
@@ -397,3 +420,4 @@ export default function App() {
     </div>
   )
 }
+
