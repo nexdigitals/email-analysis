@@ -103,7 +103,7 @@ export default function App() {
   }
 
   const filteredAndSorted = useMemo(() => {
-    if (!resultsTable) return []
+    if (!resultsTable || !Array.isArray(resultsTable)) return []
     const ft = filterText.toLowerCase()
     return resultsTable
       .filter(row => {
@@ -253,7 +253,7 @@ export default function App() {
                     aria-label="CSV upload"
                   />
                 </div>
-                <small>Columns: url, company, fullname</small>
+                <small>Columns: url, company, fullname. Free tier: batch capped at 5 rows.</small>
               </label>
 
               <button type="submit" disabled={loading} className="cta">

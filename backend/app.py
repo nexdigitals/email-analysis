@@ -168,17 +168,20 @@ def analyze_csv_endpoint():
             "fullname": row.get("fullname") if "fullname" in row else None,
         })
 
+    # Free-tier safety: cap batch to 5
+    if len(sites) > 5:
+        sites = sites[:5]
+
     render_js = _parse_render_js(payload={}, form=request.form)
 
-    # Runs with MAX_WORKERS=2 to prevent crashing
-    results = analyze_sites_concurrent(sites, max_workers=MAX_WORKERS, render_js=render_js)
-
+    # Incremental save to avoid losing partial results
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_path = os.path.join(RESULTS_DIR, f"results_{ts}.csv")
-    results_to_csv(results, out_path)
-    shutil.copyfile(out_path, RESULTS_PATH)
-
-    # Persist batch to MongoDB if configured
+    results = []
+    for res in analyze_sites_concurrent(sites, max_workers=MAX_WORKERS, render_js=render_js):
+        results.append(res)
+        results_to_csv(results, out_path)
+        shutil.copyfile(out_path, RESULTS_PATH)
     save_many_to_mongo(results)
     
     return jsonify({"message": "Batch complete", "count": len(results), "csv_path": RESULTS_PATH, "results_preview": results[:3]})
