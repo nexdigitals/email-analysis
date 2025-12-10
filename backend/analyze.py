@@ -48,6 +48,7 @@ if not _raw_keys and _single_fallback:
 
 GEMINI_KEYS = _raw_keys
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_KEY_MAX_USAGE = int(os.getenv("GEMINI_KEY_MAX_USAGE", "20"))
 _env_candidates = [m.strip() for m in os.getenv("GEMINI_MODEL_CANDIDATES", "").split(",") if m.strip()]
 GEMINI_MODEL_CANDIDATES = []
 for m in (_env_candidates or []) + [
@@ -66,6 +67,7 @@ if not GEMINI_KEYS:
 _KEY_STATE = {
     "idx": 0,
     "cooldowns": {k: 0 for k in GEMINI_KEYS},
+    "uses": {k: 0 for k in GEMINI_KEYS},
 }
 def _next_key(now: Optional[float] = None) -> Optional[str]:
     if not GEMINI_KEYS:
@@ -340,6 +342,11 @@ def _ai_vision_generate(screenshot_path: Optional[str], text: str, url: str, com
                     parsed = _parse_gemini_payload(raw or "")
                     if parsed:
                         _LAST_GOOD_MODEL = model_name
+                        _KEY_STATE["uses"][api_key] = _KEY_STATE["uses"].get(api_key, 0) + 1
+                        if _KEY_STATE["uses"][api_key] >= GEMINI_KEY_MAX_USAGE:
+                            # pre-emptively rotate this key for a short window
+                            _KEY_STATE["cooldowns"][api_key] = time.time() + 10
+                            _KEY_STATE["uses"][api_key] = 0
                         logger.info(f"Gemini success with model={model_name}")
                         parsed["_model"] = model_name
                         parsed["_api_key_used"] = api_key[-6:] if len(api_key) >= 6 else "key"

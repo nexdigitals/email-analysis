@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { gsap } from 'gsap'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:5000'
@@ -211,7 +211,7 @@ async function handleFetchTable() {
             </div>
           </div>
           <div className="stat-card fade" ref={el => (cardsRef.current[0] = el)}>
-            <div className="stat-value">{resultsFiles.length || 'â€”'}</div>
+            <div className="stat-value">{resultsFiles.length || '0'}</div>
             <div className="stat-label">Saved result files</div>
             <div className="stat-sub">Download any run as CSV</div>
           </div>
@@ -261,10 +261,10 @@ async function handleFetchTable() {
                   onDrop={handleDrop}
                 >
                   <div className="dropzone-inner">
-                    <span className="dropzone-icon">ðŸ“„</span>
+                    <span className="dropzone-icon">CSV</span>
                     <div className="dropzone-text">
                       <p className="muted">{csvFile ? `Selected: ${csvFile.name}` : 'Drag & drop CSV here or click to choose'}</p>
-                      <small>CSV only – url, company, fullname, email (processed in chunks of 5)</small>
+                      <small>CSV only � url, company, fullname, email (processed in chunks of 5)</small>
                     </div>
                   </div>
                   <input
@@ -278,7 +278,7 @@ async function handleFetchTable() {
               </label>
 
               <button type="submit" disabled={loading} className="cta">
-                {loading ? 'Analyzingâ€¦' : csvFile ? 'Run batch' : 'Analyze now'}
+                {loading ? 'Analyzing…' : csvFile ? 'Run batch' : 'Analyze now'}
               </button>
             </form>
           </div>
@@ -420,4 +420,6 @@ async function handleFetchTable() {
     </div>
   )
 }
+
+
 
