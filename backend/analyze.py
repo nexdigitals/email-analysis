@@ -47,8 +47,8 @@ if not _raw_keys and _single_fallback:
     _raw_keys = [_single_fallback]
 
 GEMINI_KEYS = _raw_keys
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-GEMINI_KEY_MAX_USAGE = int(os.getenv("GEMINI_KEY_MAX_USAGE", "20"))
+# Prefer 2.5; keep 2.0 as a fallback; skip 1.5 (404s)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 _env_candidates = [m.strip() for m in os.getenv("GEMINI_MODEL_CANDIDATES", "").split(",") if m.strip()]
 GEMINI_MODEL_CANDIDATES = []
 for m in (_env_candidates or []) + [
@@ -67,7 +67,6 @@ if not GEMINI_KEYS:
 _KEY_STATE = {
     "idx": 0,
     "cooldowns": {k: 0 for k in GEMINI_KEYS},
-    "uses": {k: 0 for k in GEMINI_KEYS},
 }
 def _next_key(now: Optional[float] = None) -> Optional[str]:
     if not GEMINI_KEYS:
@@ -342,11 +341,6 @@ def _ai_vision_generate(screenshot_path: Optional[str], text: str, url: str, com
                     parsed = _parse_gemini_payload(raw or "")
                     if parsed:
                         _LAST_GOOD_MODEL = model_name
-                        _KEY_STATE["uses"][api_key] = _KEY_STATE["uses"].get(api_key, 0) + 1
-                        if _KEY_STATE["uses"][api_key] >= GEMINI_KEY_MAX_USAGE:
-                            # pre-emptively rotate this key for a short window
-                            _KEY_STATE["cooldowns"][api_key] = time.time() + 10
-                            _KEY_STATE["uses"][api_key] = 0
                         logger.info(f"Gemini success with model={model_name}")
                         parsed["_model"] = model_name
                         parsed["_api_key_used"] = api_key[-6:] if len(api_key) >= 6 else "key"
@@ -359,13 +353,13 @@ def _ai_vision_generate(screenshot_path: Optional[str], text: str, url: str, com
                     err_text = str(exc)
                     if "RESOURCE_EXHAUSTED" in err_text or "429" in err_text:
                         sleep_for = 2 * (attempt + 1)
-                        _KEY_STATE["cooldowns"][api_key] = time.time() + max(10, sleep_for)
+                        _KEY_STATE["cooldowns"][api_key] = time.time() + max(5, sleep_for)
                         logger.warning(f"Gemini 429/quota for {model_name}, key tail {api_key[-6:]}, retry {attempt+1}/3 after {sleep_for}s")
                         time.sleep(sleep_for)
                         continue
                     if "UNAVAILABLE" in err_text or "503" in err_text:
-                        _KEY_STATE["cooldowns"][api_key] = time.time() + 20
-                        logger.warning(f"Gemini 503/overloaded for {model_name}, key tail {api_key[-6:]}; switching key after short cooldown")
+                        # do not hard cooldown; just try the next key/model
+                        logger.warning(f"Gemini 503/overloaded for {model_name}, key tail {api_key[-6:]}; trying next key/model")
                         continue
                     errors.append(f"{model_name}: {exc}")
                     logger.warning(f"Gemini Vision Error ({model_name}): {exc}")
