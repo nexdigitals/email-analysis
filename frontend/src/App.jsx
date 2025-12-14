@@ -166,8 +166,12 @@ async function loadLatestTable() {
     setResultsTable(j)
     setTableNotice(j.length ? `Loaded ${j.length} rows.` : 'No results yet.')
   } catch (err) {
-    setResultsTable([])
-    setTableNotice('No results available yet. Run an analysis first.')
+    setTableNotice(prev => {
+      if (resultsTable && resultsTable.length > 0) {
+        return 'Unable to refresh table right now. Showing preview.'
+      }
+      return 'No results available yet. Run an analysis first.'
+    })
   }
 }
 

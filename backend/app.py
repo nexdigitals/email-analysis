@@ -15,6 +15,7 @@ from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 
 # Import from your new Gemini analyze script
+# This pulls in the new SEO/Perf logic automatically
 from analyze import analyze_site, analyze_sites_concurrent, results_to_csv, validate_url
 
 load_dotenv()
@@ -31,11 +32,13 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 RESULTS_PATH = os.path.join(RESULTS_DIR, "results_latest.csv")
 
 API_TOKEN = os.getenv("API_TOKEN")
-MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", "5000000"))
+# OPTIMIZATION 1: Increased limit for large lead lists
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", "50000000")) 
 
-# CRITICAL UPDATE: Reduced to 2. Vision/Screenshots are heavy!
-# 8 workers will crash your laptop. 2 is safe.
-MAX_WORKERS = int(os.getenv("ANALYZER_MAX_WORKERS", "2"))
+# OPTIMIZATION 2: Default to 8. 
+# Since analyze.py now uses internal threading, 8 workers = 16 concurrent AI calls. 
+# This is the sweet spot for a standard machine.
+MAX_WORKERS = int(os.getenv("ANALYZER_MAX_WORKERS", "8"))
 
 MONGODB_URI = os.getenv("MONGODB_URI")
 MONGODB_DB = os.getenv("MONGODB_DB", "analyzer")
@@ -49,7 +52,8 @@ def get_mongo_collection():
         return None
     try:
         if _mongo_client is None:
-            _mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+            # OPTIMIZATION 3: Higher timeout for high-load scenarios
+            _mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=10000)
         db = _mongo_client[MONGODB_DB]
         return db[MONGODB_COLLECTION]
     except Exception as exc:
@@ -61,7 +65,6 @@ def save_result_to_mongo(doc: dict):
     if col is None:
         return
     try:
-        # Avoid mutating the original dict that we return to clients
         col.insert_one(dict(doc))
     except PyMongoError as exc:
         logger.warning(f"Mongo insert failed: {exc}")
@@ -86,13 +89,10 @@ def require_auth(fn):
     return wrapper
 
 def _parse_render_js(payload: dict, form=None) -> bool:
-    # UPDATED: Defaults to TRUE now. 
-    # We want Vision/Screenshots to be the standard behavior.
     val = None
     if payload: val = payload.get("render_js")
     if not val and form: val = form.get("render_js")
     
-    # Only return False if user specifically says "false" or "0"
     if str(val).lower() in ("0", "false", "no"):
         return False
     return True
@@ -115,7 +115,6 @@ def analyze_endpoint():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
-    # Defaults to True (Vision Mode)
     render_js = _parse_render_js(payload)
 
     try:
@@ -124,17 +123,14 @@ def analyze_endpoint():
         logger.error(f"Analysis Failed: {e}")
         return jsonify({"error": "Analysis failed internally"}), 500
 
-    # Fixed deprecated UTC timestamp
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     
     out_path = os.path.join(RESULTS_DIR, f"results_{ts}.csv")
     results_to_csv([result], out_path)
     shutil.copyfile(out_path, RESULTS_PATH)
 
-    # Persist to MongoDB if configured
     save_result_to_mongo(result)
 
-    # Remove Mongo _id if inserted, to keep response JSON-serializable
     result.pop("_id", None)
     
     return jsonify({"message": "Analysis complete", "csv_path": RESULTS_PATH, "result": result})
@@ -154,7 +150,6 @@ def analyze_csv_endpoint():
     except Exception as e:
         return jsonify({"error": f"Failed to read CSV: {str(e)}"}), 400
 
-    # Normalize headers
     norm = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
     col_map = {norm(c): c for c in df.columns}
 
@@ -190,11 +185,14 @@ def analyze_csv_endpoint():
 
     render_js = _parse_render_js(payload={}, form=request.form)
 
-    # Incremental save to avoid losing partial results; process in chunks of 5
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_path = os.path.join(RESULTS_DIR, f"results_{ts}.csv")
     results = []
-    chunk_size = 5
+    
+    # OPTIMIZATION 4: Chunk size 20 is cleaner for high throughput
+    # (5 is too frequent for disk I/O when running 8+ workers)
+    chunk_size = 20
+    
     for start in range(0, len(sites), chunk_size):
         chunk = sites[start:start+chunk_size]
         chunk_results = analyze_sites_concurrent(chunk, max_workers=MAX_WORKERS, render_js=render_js)
@@ -202,6 +200,7 @@ def analyze_csv_endpoint():
         results_to_csv(results, out_path)
         shutil.copyfile(out_path, RESULTS_PATH)
         save_many_to_mongo(chunk_results)
+    
     preview = results[:5]
     return jsonify({"message": "Batch complete", "count": len(results), "csv_path": RESULTS_PATH, "results_preview": preview})
 
@@ -259,4 +258,5 @@ def get_results_json():
         return jsonify({"error": f"Failed to read results: {str(e)}"}), 500
 
 if __name__ == "__main__":
+    print(f"Server starting. Max Workers: {MAX_WORKERS}. Batch Size: 20.")
     app.run(port=5000)
