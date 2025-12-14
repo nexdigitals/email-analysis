@@ -114,6 +114,17 @@ export default function App() {
     setLoading(false)
   }
 
+  const getCompanyLabel = row =>
+    row?.company ||
+    row?.company_name ||
+    row?.business ||
+    row?.business_name ||
+    row?.company_fullname ||
+    row?.full_name ||
+    ''
+
+  const getEmailLabel = row => row?.email || row?.contact_email || row?.email_address || ''
+
   const filteredAndSorted = useMemo(() => {
     if (!resultsTable || !Array.isArray(resultsTable)) return []
     const ft = filterText.toLowerCase()
@@ -122,13 +133,19 @@ export default function App() {
         if (!ft) return true
         return (
           (row.website_url || '').toLowerCase().includes(ft) ||
-          (row.company || row.full_name || '').toLowerCase().includes(ft) ||
-          (row.email || '').toLowerCase().includes(ft)
+          getCompanyLabel(row).toLowerCase().includes(ft) ||
+          getEmailLabel(row).toLowerCase().includes(ft)
         )
       })
       .sort((a, b) => {
-        const aVal = (a[sortKey] || '').toLowerCase()
-        const bVal = (b[sortKey] || '').toLowerCase()
+        const getSortValue = (row, key) => {
+          if (key === 'company') {
+            return getCompanyLabel(row).toLowerCase()
+          }
+          return (row[key] || '').toLowerCase()
+        }
+        const aVal = getSortValue(a, sortKey)
+        const bVal = getSortValue(b, sortKey)
         if (aVal < bVal) return sortDir === 'asc' ? -1 : 1
         if (aVal > bVal) return sortDir === 'asc' ? 1 : -1
         return 0
@@ -398,8 +415,8 @@ async function handleFetchTable() {
                   {filteredAndSorted.map((row, i) => (
                     <tr key={i}>
                       <td>{row.website_url}</td>
-                      <td>{row.company || row.full_name || ''}</td>
-                      <td>{row.email || ''}</td>
+                      <td>{getCompanyLabel(row)}</td>
+                      <td>{getEmailLabel(row)}</td>
                       <td>{row.problem || row.problems_paragraph}</td>
                       <td>{row.offer || row.offers_paragraph}</td>
                     </tr>
